@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EBA Kitap İndirici</title>
+<style>
+  :root { --bg:#f5f6fa; --kart:#fff; --yazi:#1c2030; --soluk:#667; --vurgu:#2f6fed; --cizgi:#dde1ea; --hata:#c62828; --tamam:#1b7f3b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12141b; --kart:#1b1e28; --yazi:#e8eaf2; --soluk:#9aa1b5; --vurgu:#6c9bff; --cizgi:#2d3243; --hata:#ff8a80; --tamam:#6fd68f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--yazi); font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+         min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  main { width:100%; max-width:560px; background:var(--kart); border:1px solid var(--cizgi); border-radius:16px; padding:28px; }
+  h1 { margin:0 0 4px; font-size:1.5rem; }
+  p.alt { margin:0 0 20px; color:var(--soluk); }
+  label { display:block; font-weight:600; margin-bottom:6px; }
+  input[type=url] { width:100%; padding:12px 14px; font-size:1rem; border:1px solid var(--cizgi); border-radius:10px;
+                    background:var(--bg); color:var(--yazi); }
+  input[type=url]:focus { outline:2px solid var(--vurgu); outline-offset:1px; }
+  button, a.btn { display:inline-block; margin-top:14px; padding:12px 20px; font-size:1rem; font-weight:600; border:0; border-radius:10px;
+                  background:var(--vurgu); color:#fff; cursor:pointer; text-decoration:none; }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  #durum { margin-top:20px; display:none; }
+  .cubuk { height:10px; background:var(--bg); border:1px solid var(--cizgi); border-radius:99px; overflow:hidden; }
+  .cubuk > div { height:100%; width:0; background:var(--vurgu); transition:width .4s; }
+  .cubuk.belirsiz > div { width:35%; animation:kay 1.2s infinite ease-in-out; }
+  @keyframes kay { 0%{margin-left:-35%} 100%{margin-left:100%} }
+  #mesaj { margin:8px 0 0; color:var(--soluk); font-size:.95rem; }
+  #mesaj.hata { color:var(--hata); } #mesaj.tamam { color:var(--tamam); font-weight:600; }
+  footer { margin-top:22px; padding-top:14px; border-top:1px solid var(--cizgi); color:var(--soluk); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📚 EBA Kitap İndirici</h1>
+  <p class="alt">EBA'daki kitabın linkini yapıştırın, PDF olarak indirin.</p>
+
+  <label for="link">Kitap linki</label>
+  <input id="link" type="url" inputmode="url" autocomplete="off"
+         placeholder="https://f.eba.gov.tr/flippingbook/.../files/mobile/index.html#35">
+  <button id="btn">PDF Hazırla</button>
+
+  <div id="durum" aria-live="polite">
+    <div class="cubuk" id="cubuk"><div id="dolgu"></div></div>
+    <p id="mesaj"></p>
+    <a class="btn" id="indir" style="display:none" download>⬇ PDF'i indir</a>
+  </div>
+
+  <footer>
+    Yalnızca MEB'in ücretsiz yayınladığı EBA kitapları için, kişisel çalışma amacıyla kullanın.
+    Hazırlanan dosyalar sunucuda en fazla birkaç saat tutulur.
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const link = $("link"), btn = $("btn"), durum = $("durum"), cubuk = $("cubuk"),
+      dolgu = $("dolgu"), mesaj = $("mesaj"), indirBtn = $("indir");
+let zamanlayici = null;
+
+function goster(metin, sinif = "") { mesaj.textContent = metin; mesaj.className = sinif; }
+
+async function baslat() {
+  clearTimeout(zamanlayici);
+  indirBtn.style.display = "none";
+  durum.style.display = "block";
+  cubuk.classList.add("belirsiz"); dolgu.style.width = "";
+  goster("Başlatılıyor…");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/baslat", { method: "POST", headers: { "Content-Type": "application/json" },
+                                           body: JSON.stringify({ url: link.value }) });
+    const v = await r.json();
+    if (!r.ok) throw new Error(v.hata || "Bir hata oluştu.");
+    sorgula(v.id);
+  } catch (e) { bitir(e.message, "hata"); }
+}
+
+async function sorgula(id) {
+  try {
+    const r = await fetch("/api/durum/" + id);
+    const v = await r.json();
+    if (!r.ok) throw new Error(v.hata || "Durum alınamadı.");
+
+    if (v.durum === "hata") return bitir(v.mesaj, "hata");
+    if (v.durum === "bitti") {
+      cubuk.classList.remove("belirsiz"); dolgu.style.width = "100%";
+      let m = `Hazır! (${v.sayfa ?? ""} sayfa)`.replace("( sayfa)", "");
+      if (v.eksik && v.eksik.length) m += ` Bazı sayfalar indirilemedi: ${v.eksik.join(", ")}.`;
+      indirBtn.href = "/api/indir/" + id; indirBtn.style.display = "inline-block";
+      return bitir(m.trim(), "tamam");
+    }
+    if (v.asama === "indiriliyor" && v.toplam) {
+      cubuk.classList.remove("belirsiz");
+      dolgu.style.width = Math.round(100 * v.mevcut / v.toplam) + "%";
+      goster(`Sayfalar indiriliyor: ${v.mevcut} / ${v.toplam}`);
+    } else if (v.asama === "indiriliyor") {
+      goster(`Sayfalar indiriliyor: ${v.mevcut} sayfa…`);
+    } else if (v.asama === "pdf") {
+      cubuk.classList.add("belirsiz"); goster("PDF oluşturuluyor…");
+    } else { goster("Kitap aranıyor…"); }
+    zamanlayici = setTimeout(() => sorgula(id), 1000);
+  } catch (e) { bitir(e.message, "hata"); }
+}
+
+function bitir(metin, sinif) {
+  cubuk.classList.remove("belirsiz");
+  if (sinif === "hata") dolgu.style.width = "0";
+  goster(metin, sinif); btn.disabled = false;
+}
+
+btn.addEventListener("click", baslat);
+link.addEventListener("keydown", (e) => { if (e.key === "Enter") baslat(); });
+</script>
+</body>
+</html>
